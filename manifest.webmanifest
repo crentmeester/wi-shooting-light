@@ -1,0 +1,14 @@
+{
+  "name": "Wisconsin Shooting Light",
+  "short_name": "Shooting Light",
+  "description": "Wisconsin legal shooting hours for your zone and the seasons open for your licenses.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#141a13",
+  "theme_color": "#141a13",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
