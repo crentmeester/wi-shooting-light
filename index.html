@@ -126,11 +126,23 @@ select, input[type=date], input[type=number] {
 .t .k { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #aab59f; font-weight: 600; }
 .t .v { font-family: var(--f-mono); font-size: 20px; }
 .t.legal .v { color: #ffb185; }
-.bar { position: relative; height: 34px; border-radius: 8px; background: linear-gradient(90deg, #1a2118, #39432f 50%, #1a2118); overflow: hidden; }
-.bar .win { position: absolute; top: 0; bottom: 0; background: rgba(255,106,31,.28); border-left: 2px solid #ff8a4c; border-right: 2px solid #ff8a4c; }
-.bar .sun { position: absolute; top: 0; bottom: 0; background: rgba(255,226,150,.18); }
-.bar .now { position: absolute; top: -2px; bottom: -2px; width: 3px; background: #fff; border-radius: 2px; box-shadow: 0 0 0 2px rgba(0,0,0,.35); }
-.barlab { display: flex; justify-content: space-between; font-size: 12px; color: #aab59f; font-family: var(--f-mono); }
+/* Sky dial: the sun's path from sunrise to sunset, legal window in blaze orange */
+.dial { width: 100%; height: auto; display: block; overflow: visible; }
+.dial .path { fill: none; stroke: #55624d; stroke-width: 2; stroke-dasharray: 2 5; stroke-linecap: round; }
+.dial .legal { fill: none; stroke: #ff6a1f; stroke-width: 6; stroke-linecap: round; }
+.dial .legalglow { fill: none; stroke: rgba(255,106,31,.25); stroke-width: 16; stroke-linecap: round; }
+.dial .done { fill: none; stroke: #7d4f33; stroke-width: 6; stroke-linecap: round; }
+.dial .horizon { stroke: #8f9b84; stroke-width: 1.5; }
+.dial .ground { fill: #1a2118; }
+.dial .tick { stroke: #8f9b84; stroke-width: 1.5; }
+.dial .tick.lg { stroke: #ff8a4c; stroke-width: 2.5; }
+.dial .tv { font-family: var(--f-mono); font-size: 11px; fill: #eef2e8; }
+.dial .tv.lg { fill: #ffb185; }
+.dial .tc { font-family: var(--f-display); font-size: 9.5px; letter-spacing: .1em; fill: #aab59f; font-weight: 600; }
+.dial .sunball { fill: #ffd27a; }
+.dial .sunball.down { fill: #8a7a5c; }
+.dial .sunhalo { fill: url(#sunGlow); }
+.dial .nowtxt { font-family: var(--f-display); font-size: 11px; letter-spacing: .12em; font-weight: 700; fill: #ffd27a; }
 .rules { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #39432f; padding-top: 12px; }
 .rule { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
 .rule span:first-child { color: #c4cdb9; min-width: 0; }
@@ -220,8 +232,7 @@ footer a { color: inherit; }
       <div class="sub" id="bigSub"></div>
     </div>
     <div>
-      <div class="bar" id="bar"><div class="sun" id="barSun"></div><div class="win" id="barWin"></div><div class="now" id="barNow"></div></div>
-      <div class="barlab"><span id="barL"></span><span id="barR"></span></div>
+      <svg class="dial" id="dial" viewBox="0 0 320 168" role="img" aria-label="Sun path with the legal shooting window"></svg>
     </div>
     <div class="times">
       <div class="t legal"><div class="k">Legal start</div><div class="v" id="tStart"></div></div>
@@ -644,12 +655,7 @@ footer a { color: inherit; }
       $("bigSub").textContent = `${t(win.start)} to ${t(win.end)} for deer, small game & fall turkey.`;
     }
 
-    // bar from 1h before start to 1h after end
-    const a = win.start - 3600000, b = win.end + 3600000, span = b - a, pct = x => ((x - a) / span * 100).toFixed(2) + "%";
-    const bw = $("barWin"); bw.style.left = pct(win.start); bw.style.width = ((win.end - win.start) / span * 100).toFixed(2) + "%";
-    const bs = $("barSun"); bs.style.left = pct(sun.rise); bs.style.width = ((sun.set - sun.rise) / span * 100).toFixed(2) + "%";
-    const bn = $("barNow"); bn.hidden = !(live && now > a && now < b); if (!bn.hidden) bn.style.left = pct(now);
-    $("barL").textContent = t(a); $("barR").textContent = t(b);
+    drawDial(win, sun, live ? now : null);
 
     const rows = [
       ["Deer, bear, small game, fall turkey", windowFor("std", ymd, sun)],
@@ -657,6 +663,50 @@ footer a { color: inherit; }
       ["Early teal", windowFor("teal", ymd, sun)]
     ];
     $("rules").innerHTML = rows.map(([k, w]) => `<div class="rule"><span>${k}</span><span>${t(w.start)} – ${t(w.end)}</span></div>`).join("");
+  }
+
+  // Sky dial. x = time of day; y = a sine arc that crosses the horizon at sunrise and sunset,
+  // dipping below it in the twilight on either side.
+  function drawDial(win, sun, now) {
+    const W = 320, PAD = 14, HZ = 112, AMP = 84;
+    const a = win.start - 70 * MIN, b = win.end + 70 * MIN;
+    const X = tm => PAD + (tm - a) / (b - a) * (W - 2 * PAD);
+    const Yt = tm => {
+      const v = Math.sin(Math.PI * (tm - sun.rise) / (sun.set - sun.rise));
+      return v >= 0 ? HZ - AMP * v : HZ + Math.min(8, -v * AMP * 0.3); // shallow twilight dip, clear of the labels
+    };
+    const path = (t0, t1, n = 64) => {
+      let d = "";
+      for (let i = 0; i <= n; i++) { const tm = t0 + (t1 - t0) * i / n; d += (i ? "L" : "M") + X(tm).toFixed(1) + "," + Yt(tm).toFixed(1); }
+      return d;
+    };
+    const f = n => n.toFixed(1);
+    let h = `<defs><radialGradient id="sunGlow"><stop offset="0" stop-color="#ffd27a" stop-opacity=".55"/><stop offset="1" stop-color="#ffd27a" stop-opacity="0"/></radialGradient>
+      <linearGradient id="skyFade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6a1f" stop-opacity="0"/><stop offset="1" stop-color="#ff6a1f" stop-opacity=".10"/></linearGradient></defs>`;
+    h += `<rect x="0" y="${HZ - 40}" width="${W}" height="40" fill="url(#skyFade)"/>`;
+    h += `<rect class="ground" x="0" y="${HZ}" width="${W}" height="${168 - HZ}" rx="6"/>`;
+    h += `<path class="path" d="${path(a, b)}"/>`;
+    h += `<path class="legalglow" d="${path(win.start, win.end)}"/><path class="legal" d="${path(win.start, win.end)}"/>`;
+    if (now !== null && now > win.start) h += `<path class="done" d="${path(win.start, Math.min(now, win.end), 48)}"/>`;
+    h += `<line class="horizon" x1="0" y1="${HZ}" x2="${W}" y2="${HZ}"/>`;
+    // Ticks and labels: legal times outside, sun times inside, so neighbours never overlap.
+    const marks = [
+      [win.start, "LEGAL", "end", true], [sun.rise, "SUNRISE", "start", false],
+      [sun.set, "SUNSET", "end", false], [win.end, "LEGAL", "start", true]
+    ];
+    for (const [tm, cap, anc, lg] of marks) {
+      const x = X(tm), dx = anc === "end" ? -3 : 3;
+      h += `<line class="tick ${lg ? "lg" : ""}" x1="${f(x)}" y1="${HZ - 4}" x2="${f(x)}" y2="${HZ + 8}"/>`;
+      h += `<text class="tv ${lg ? "lg" : ""}" x="${f(x + dx)}" y="${HZ + 24}" text-anchor="${anc}">${t(tm)}</text>`;
+      h += `<text class="tc" x="${f(x + dx)}" y="${HZ + 37}" text-anchor="${anc}">${cap}</text>`;
+    }
+    if (now !== null && now >= a && now <= b) {
+      const x = X(now), y = Yt(now), up = now >= sun.rise && now <= sun.set;
+      h += `<circle class="sunhalo" cx="${f(x)}" cy="${f(y)}" r="22"/><circle class="sunball ${up ? "" : "down"}" cx="${f(x)}" cy="${f(y)}" r="8"/>`;
+      const ty = Math.max(12, y - 16);
+      h += `<text class="nowtxt" x="${f(Math.min(Math.max(x, 22), W - 22))}" y="${f(ty)}" text-anchor="middle">NOW</text>`;
+    }
+    $("dial").innerHTML = h;
   }
 
   function seasonState(s, ymd, eff) {
