@@ -148,6 +148,37 @@ select, input[type=date], input[type=number] {
 .rule span:first-child { color: #c4cdb9; min-width: 0; }
 .rule span:last-child { font-family: var(--f-mono); white-space: nowrap; }
 
+/* Weather */
+.wx { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.wxhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.wxrefresh { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; width: 36px; height: 36px; display: grid; place-items: center; cursor: pointer; color: var(--muted); flex: none; }
+.wxrefresh[aria-busy=true] svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.wxnow { display: grid; grid-template-columns: 84px 1fr auto; gap: 14px; align-items: center; }
+.wxcompass { width: 84px; height: 84px; }
+.wxcompass .ring { fill: var(--bg); stroke: var(--line); stroke-width: 2; }
+.wxcompass .cp { font-family: var(--f-display); font-weight: 700; font-size: 10px; fill: var(--muted); text-anchor: middle; }
+.wxcompass .arr { fill: var(--blaze); }
+.wxcompass .tail { stroke: var(--blaze); stroke-width: 3; stroke-linecap: round; }
+#wxArrow { transform-origin: 40px 40px; transition: transform .6s ease; }
+.wxlabel { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.wxwind { font-family: var(--f-display); font-weight: 700; font-size: 38px; line-height: 1; }
+.wxwind small { font-size: 16px; font-weight: 500; color: var(--muted); }
+.wxdir { font-size: 14px; color: var(--muted); }
+.wxdir b { color: var(--ink); }
+.wxtempbox { text-align: right; min-width: 0; }
+.wxtemp { font-family: var(--f-display); font-weight: 700; font-size: 38px; line-height: 1; }
+.wxsky { font-size: 13px; color: var(--muted); max-width: 110px; }
+.wxhours { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.wxh { flex: 1 0 64px; background: var(--bg); border-radius: 10px; padding: 8px 6px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 13px; }
+.wxh .ht { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.wxh .ht.lg { color: var(--blaze); }
+.wxh .hv { font-family: var(--f-mono); font-size: 13px; }
+.wxh svg { width: 18px; height: 18px; }
+.wxh svg path { fill: var(--ink); }
+.wxnote { font-size: 12px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { #wxArrow { transition: none; } .wxrefresh[aria-busy=true] svg { animation: none; } }
+
 /* Licenses */
 details.lic { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
 details.lic summary { list-style: none; cursor: pointer; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
@@ -241,6 +272,33 @@ footer a { color: inherit; }
       <div class="t"><div class="k">Sunset</div><div class="v" id="tSet"></div></div>
     </div>
     <div class="rules" id="rules"></div>
+  </section>
+
+  <section class="wx" id="wx" hidden aria-live="polite">
+    <div class="wxhead">
+      <div class="eyebrow">Weather · <span id="wxWhere">loading</span></div>
+      <button type="button" class="wxrefresh" id="wxRefresh" aria-label="Refresh weather">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+      </button>
+    </div>
+    <div class="wxnow">
+      <svg class="wxcompass" viewBox="0 0 80 80" aria-hidden="true">
+        <circle cx="40" cy="40" r="36" class="ring"/>
+        <text x="40" y="13" class="cp">N</text><text x="71" y="44" class="cp">E</text><text x="40" y="75" class="cp">S</text><text x="9" y="44" class="cp">W</text>
+        <g id="wxArrow"><path d="M40 16 L49 44 L40 38 L31 44 Z" class="arr"/><line x1="40" y1="38" x2="40" y2="62" class="tail"/></g>
+      </svg>
+      <div class="wxmain">
+        <div class="wxlabel" id="wxLabel">Now</div>
+        <div class="wxwind"><span id="wxSpd">–</span><small> mph</small></div>
+        <div class="wxdir" id="wxDir"></div>
+      </div>
+      <div class="wxtempbox">
+        <div class="wxtemp" id="wxTemp">–</div>
+        <div class="wxsky" id="wxSky"></div>
+      </div>
+    </div>
+    <div class="wxhours" id="wxHours"></div>
+    <div class="wxnote" id="wxNote"></div>
   </section>
 
   <details class="lic" id="licBox">
@@ -467,6 +525,7 @@ footer a { color: inherit; }
   if (!AREAS[zone.area] || !ZONE_ADD.hasOwnProperty(zone.z)) zone = { area: "S", z: "C" };
   let pickedDay = null; // null = live today
   let gps = null; // last GPS fix {lat, lon}
+  let gpsActive = false; // true while the zone comes from GPS (a map tap turns it off)
   // GPS only works when the page runs as its own website (not inside the Claude artifact viewer).
   const gpsCapable = !!navigator.geolocation && window.top === window;
   const openCards = new Set();
@@ -541,11 +600,11 @@ footer a { color: inherit; }
       store.set("gpsOn", true);
       const r = zoneFromLatLon(gps.lat, gps.lon);
       if (!r) { gpsSay("You're outside Wisconsin. Tap the zone you'll hunt in.", true); buildMap(); return; }
-      zone = { area: r.area, z: r.z }; store.set("zone", zone);
+      zone = { area: r.area, z: r.z }; store.set("zone", zone); gpsActive = true;
       gpsSay(r.nearLine
         ? `Set from GPS. You're near the Northern/Southern line, so check the map before you trust it.`
         : `Set from GPS (blue dot). Tap the map to change it.`, r.nearLine);
-      buildMap(); render();
+      buildMap(); render(); loadWx();
     }, err => {
       btn.removeAttribute("aria-busy"); $("gpsBtnText").textContent = "Use my location";
       if (err.code === 1) { store.set("gpsOn", false); gpsSay("Location is turned off for this site. Allow it in your browser settings, or tap your zone.", true); }
@@ -586,9 +645,9 @@ footer a { color: inherit; }
     svg.innerHTML = h;
     svg.querySelectorAll(".reg").forEach(r => {
       const pick = () => {
-        zone = { area: r.dataset.a, z: r.dataset.z }; store.set("zone", zone);
+        zone = { area: r.dataset.a, z: r.dataset.z }; store.set("zone", zone); gpsActive = false;
         if (gps) gpsSay("Zone set by hand. Tap “Update location” to go back to GPS.");
-        buildMap(); render();
+        buildMap(); render(); loadWx();
       };
       r.addEventListener("click", pick);
       r.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
@@ -709,6 +768,87 @@ footer a { color: inherit; }
     $("dial").innerHTML = h;
   }
 
+  // ---------- weather (National Weather Service hourly forecast) ----------
+  const COMPASS = { N: 0, NNE: 22.5, NE: 45, ENE: 67.5, E: 90, ESE: 112.5, SE: 135, SSE: 157.5, S: 180, SSW: 202.5, SW: 225, WSW: 247.5, W: 270, WNW: 292.5, NW: 315, NNW: 337.5 };
+  const OPP = d => Object.keys(COMPASS).find(k => COMPASS[k] === (COMPASS[d] + 180) % 360) || "";
+  const DIRWORD = { N: "north", NNE: "north-northeast", NE: "northeast", ENE: "east-northeast", E: "east", ESE: "east-southeast", SE: "southeast", SSE: "south-southeast", S: "south", SSW: "south-southwest", SW: "southwest", WSW: "west-southwest", W: "west", WNW: "west-northwest", NW: "northwest", NNW: "north-northwest" };
+  const fmtHour = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric" });
+  let wxBusy = false, wxAgain = false;
+  function wxPoint() {
+    if (gpsActive && gps && zoneFromLatLon(gps.lat, gps.lon)) return { lat: gps.lat, lon: gps.lon, approx: false };
+    const [e, w] = BANDS[zone.z];
+    const lon = zone.z === "A" ? (zone.area === "N" ? -87.75 : -87.95) : (e + w) / 2;
+    const lat = zone.area === "N" ? 45.6 : 43.4;
+    return { lat, lon, approx: true };
+  }
+  async function loadWx(force) {
+    if (!gpsCapable) return;
+    if (wxBusy) { wxAgain = true; return; } // location changed mid-request: fetch again when done
+    const pt = wxPoint(), key = pt.lat.toFixed(2) + "," + pt.lon.toFixed(2);
+    const cached = store.get("wx", null);
+    if (!force && cached && cached.key === key && Date.now() - cached.ts < 30 * MIN) { renderWx(); return; }
+    wxBusy = true; $("wxRefresh").setAttribute("aria-busy", "true");
+    try {
+      const pr = await fetch(`https://api.weather.gov/points/${pt.lat.toFixed(4)},${pt.lon.toFixed(4)}`, { headers: { Accept: "application/geo+json" } });
+      if (!pr.ok) throw new Error("points " + pr.status);
+      const pj = await pr.json();
+      const fr = await fetch(pj.properties.forecastHourly, { headers: { Accept: "application/geo+json" } });
+      if (!fr.ok) throw new Error("forecast " + fr.status);
+      const fj = await fr.json();
+      const city = pj.properties.relativeLocation?.properties?.city || "";
+      const periods = fj.properties.periods.slice(0, 168).map(p => ({
+        s: Date.parse(p.startTime), e: Date.parse(p.endTime), t: p.temperature, ws: p.windSpeed, wd: p.windDirection,
+        sky: p.shortForecast, pop: p.probabilityOfPrecipitation?.value ?? null
+      }));
+      store.set("wx", { key, ts: Date.now(), city, approx: pt.approx, periods });
+      $("wxNote").textContent = "";
+    } catch (err) {
+      $("wxNote").textContent = store.get("wx", null) ? "Couldn't reach the Weather Service. Showing the last forecast you loaded." : "Couldn't reach the Weather Service. Check your signal and tap refresh.";
+    } finally {
+      wxBusy = false; $("wxRefresh").removeAttribute("aria-busy"); renderWx();
+      if (wxAgain) { wxAgain = false; loadWx(); }
+    }
+  }
+  const arrowSvg = d => `<svg viewBox="0 0 24 24" style="transform:rotate(${(COMPASS[d] ?? 0) + 180}deg)"><path d="M12 3l5 14-5-3-5 3z"/></svg>`;
+  function renderWx() {
+    if (!gpsCapable) return;
+    $("wx").hidden = false;
+    const c = store.get("wx", null);
+    if (!c || !c.periods || !c.periods.length) return;
+    const live = pickedDay === null, ymd = live ? todayYMD() : pickedDay, now = Date.now();
+    const age = Math.round((now - c.ts) / 60000);
+    $("wxWhere").textContent = `${c.approx ? "middle of your zone" : "near " + (c.city || "you")} · ${age < 2 ? "just updated" : age < 90 ? age + " min ago" : "as of " + t(c.ts)}`;
+    const sun = sunFor(ymd), win = windowFor("std", ymd, sun);
+    let main, label, strip;
+    if (live) {
+      main = c.periods.find(p => p.s <= now && now < p.e) || c.periods.find(p => p.s > now);
+      label = "Now";
+      strip = c.periods.filter(p => p.s > now).slice(0, 8);
+    } else {
+      const day = c.periods.filter(p => fmtYMD.format(new Date(p.s)) === ymd);
+      main = day.find(p => p.s <= win.start && win.start < p.e) || day.find(p => p.s >= win.start);
+      label = "At legal start";
+      strip = day.filter(p => p.e > win.start && p.s < win.end).filter((p, i) => i % 2 === 0).slice(0, 8);
+    }
+    if (!main) {
+      $("wxLabel").textContent = live ? "Now" : "No forecast yet";
+      $("wxSpd").textContent = "–"; $("wxTemp").textContent = "–"; $("wxSky").textContent = "";
+      $("wxDir").textContent = live ? "" : "The forecast covers the next 7 days.";
+      $("wxHours").innerHTML = ""; return;
+    }
+    $("wxLabel").textContent = label + " · " + fmtHour.format(new Date(main.s));
+    $("wxSpd").textContent = main.ws.replace(/\s*mph/i, "");
+    $("wxTemp").textContent = main.t + "°";
+    $("wxSky").textContent = main.sky + (main.pop ? ` · ${main.pop}% precip` : "");
+    const calm = /^0\s/.test(main.ws) || !COMPASS.hasOwnProperty(main.wd);
+    $("wxDir").innerHTML = calm ? "Calm" : `From the <b>${DIRWORD[main.wd]}</b>, carrying scent ${DIRWORD[OPP(main.wd)] || "downwind"}`;
+    $("wxArrow").style.transform = `rotate(${(COMPASS[main.wd] ?? 0) + 180}deg)`;
+    $("wxHours").innerHTML = strip.map(p => {
+      const lg = p.s <= win.start && win.start < p.e || p.s <= win.end && win.end < p.e;
+      return `<div class="wxh"><span class="ht ${lg ? "lg" : ""}">${fmtHour.format(new Date(p.s))}</span>${arrowSvg(p.wd)}<span class="hv">${p.ws.replace(/\s*mph/i, "")}</span><span class="hv">${p.t}°</span></div>`;
+    }).join("");
+  }
+
   function seasonState(s, ymd, eff) {
     const open = openOn(s, ymd);
     const bow = bowOnly(s, eff);
@@ -785,6 +925,7 @@ footer a { color: inherit; }
     $("clock").textContent = t(Date.now()) + " CT";
     renderHero(ymd, live, loc, sun);
     renderList(ymd, live, loc, sun);
+    renderWx();
   }
 
   buildControls();
@@ -792,8 +933,11 @@ footer a { color: inherit; }
   if (gpsCapable) {
     $("gpsRow").hidden = false;
     $("gpsBtn").addEventListener("click", () => locate(true));
+    $("wxRefresh").addEventListener("click", () => loadWx(true));
     if (store.get("gpsOn", false)) locate();
     else gpsSay("Find your zone automatically, or tap it on the map.");
+    loadWx();
+    setInterval(() => loadWx(), 10 * MIN);
   }
   setInterval(() => {
     if (pickedDay === null && $("day").value !== todayYMD()) $("day").value = todayYMD();
