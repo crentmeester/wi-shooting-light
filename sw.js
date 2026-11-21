@@ -1,6 +1,6 @@
 // Offline support: the app shell is cached on install. Pages load from the network when
 // online (so updates arrive) and fall back to the cache in the field with no signal.
-const CACHE = "wsl-eb144f7d92";
+const CACHE = "wsl-b5717c980d";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {

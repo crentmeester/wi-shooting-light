@@ -177,6 +177,19 @@ select, input[type=date], input[type=number] {
 .wxh svg { width: 18px; height: 18px; }
 .wxh svg path { fill: var(--ink); }
 .wxnote { font-size: 12px; color: var(--muted); }
+.wxp { display: grid; grid-template-columns: 1fr 132px; gap: 4px 12px; align-items: center; border-top: 1px solid var(--line); padding-top: 12px; }
+.wxpval { font-family: var(--f-display); font-weight: 700; font-size: 28px; line-height: 1.05; }
+.wxpval small { font-size: 14px; font-weight: 500; color: var(--muted); }
+.wxptrend { font-size: 14px; font-weight: 600; }
+.wxptrend.fall { color: var(--blaze); }
+.wxptrend.rise { color: var(--legal); }
+.wxptrend.steady { color: var(--muted); }
+.wxspark { width: 132px; height: 44px; }
+.wxspark .ln { fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.wxspark .ar { fill: var(--line); opacity: .6; }
+.wxspark .pt { fill: var(--blaze); }
+.wxspark .lb { font-family: var(--f-body); font-size: 9px; fill: var(--muted); }
+.wxpnote { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { #wxArrow { transition: none; } .wxrefresh[aria-busy=true] svg { animation: none; } }
 
 /* Licenses */
@@ -296,6 +309,15 @@ footer a { color: inherit; }
         <div class="wxtemp" id="wxTemp">–</div>
         <div class="wxsky" id="wxSky"></div>
       </div>
+    </div>
+    <div class="wxp" id="wxP" hidden>
+      <div class="wxpmain">
+        <div class="wxlabel">Pressure</div>
+        <div class="wxpval"><span id="wxPVal"></span><small> inHg</small></div>
+        <div class="wxptrend" id="wxPTrend"></div>
+      </div>
+      <svg class="wxspark" id="wxSpark" viewBox="0 0 132 44" aria-hidden="true"></svg>
+      <div class="wxpnote" id="wxPNote"></div>
     </div>
     <div class="wxhours" id="wxHours"></div>
     <div class="wxnote" id="wxNote"></div>
@@ -800,7 +822,8 @@ footer a { color: inherit; }
         s: Date.parse(p.startTime), e: Date.parse(p.endTime), t: p.temperature, ws: p.windSpeed, wd: p.windDirection,
         sky: p.shortForecast, pop: p.probabilityOfPrecipitation?.value ?? null
       }));
-      store.set("wx", { key, ts: Date.now(), city, approx: pt.approx, periods });
+      const pres = await loadPressure(pj.properties.observationStations).catch(() => null);
+      store.set("wx", { key, ts: Date.now(), city, approx: pt.approx, periods, pres });
       $("wxNote").textContent = "";
     } catch (err) {
       $("wxNote").textContent = store.get("wx", null) ? "Couldn't reach the Weather Service. Showing the last forecast you loaded." : "Couldn't reach the Weather Service. Check your signal and tap refresh.";
@@ -809,12 +832,78 @@ footer a { color: inherit; }
       if (wxAgain) { wxAgain = false; loadWx(); }
     }
   }
+  // Barometric pressure from the nearest NWS station that reports it: last ~12 hours of readings.
+  async function loadPressure(stationsUrl) {
+    const sr = await fetch(stationsUrl, { headers: { Accept: "application/geo+json" } });
+    if (!sr.ok) return null;
+    const stations = (await sr.json()).features.slice(0, 3);
+    for (const st of stations) {
+      const id = st.properties.stationIdentifier;
+      const start = new Date(Date.now() - 13 * 3600000).toISOString().replace(/\.\d+Z$/, "Z");
+      const or = await fetch(`https://api.weather.gov/stations/${id}/observations?start=${start}`, { headers: { Accept: "application/geo+json" } });
+      if (!or.ok) continue;
+      const pts = (await or.json()).features
+        .map(f => [Date.parse(f.properties.timestamp), f.properties.barometricPressure?.value])
+        .filter(([, v]) => typeof v === "number" && v > 90000 && v < 110000)
+        .map(([ts, v]) => [ts, v / 3386.389]) // pascals to inches of mercury
+        .sort((a, b) => a[0] - b[0]);
+      if (pts.length >= 3) return { station: st.properties.name, pts };
+    }
+    return null;
+  }
+  // 3-hour change, the standard way forecasters describe a pressure trend.
+  function pressureTrend(pts) {
+    const last = pts[pts.length - 1], target = last[0] - 3 * 3600000;
+    let past = pts[0];
+    for (const p of pts) if (Math.abs(p[0] - target) < Math.abs(past[0] - target)) past = p;
+    if (last[0] - past[0] < 90 * MIN) return null;
+    const d = (last[1] - past[1]) * (3 * 3600000) / (last[0] - past[0]);
+    const kind = Math.abs(d) < 0.02 ? "steady" : d > 0 ? "rise" : "fall";
+    const fast = Math.abs(d) >= 0.06;
+    return { d, kind, fast };
+  }
+  function renderPressure(pres) {
+    const box = $("wxP");
+    if (!pres || !pres.pts || pres.pts.length < 3) { box.hidden = true; return; }
+    box.hidden = false;
+    const pts = pres.pts, last = pts[pts.length - 1];
+    $("wxPVal").textContent = last[1].toFixed(2);
+    const tr = pressureTrend(pts), el = $("wxPTrend");
+    if (!tr) { el.className = "wxptrend steady"; el.textContent = "Trend not available yet"; }
+    else {
+      const word = tr.kind === "steady" ? "Steady" : (tr.fast ? (tr.kind === "rise" ? "Rising fast" : "Falling fast") : (tr.kind === "rise" ? "Rising" : "Falling"));
+      const arrow = tr.kind === "steady" ? "→" : tr.kind === "rise" ? "↑" : "↓";
+      el.className = "wxptrend " + tr.kind;
+      el.textContent = `${arrow} ${word} · ${tr.d >= 0 ? "+" : "−"}${Math.abs(tr.d).toFixed(2)} in 3 hr`;
+    }
+    const notes = {
+      fall: "Falling pressure usually means a front or storm is on the way. Many hunters see deer feed harder just before it arrives.",
+      rise: "Rising pressure usually follows a front as the weather clears. Many hunters see good movement on the first cool, calm day after.",
+      steady: "Steady pressure means settled weather, so movement tends to follow the usual morning and evening pattern."
+    };
+    const age = Math.round((Date.now() - last[0]) / 60000);
+    $("wxPNote").textContent = (tr ? notes[tr.kind] + " " : "") + `Measured at ${pres.station}, ${age < 2 ? "just now" : age + " min ago"}.`;
+    // Sparkline of the last ~12 hours
+    const W = 132, H = 44, PL = 2, PR = 6, PT = 6, PB = 12;
+    const t0 = pts[0][0], t1 = last[0], vs = pts.map(p => p[1]);
+    let lo = Math.min(...vs), hi = Math.max(...vs);
+    if (hi - lo < 0.06) { const m = (hi + lo) / 2; lo = m - 0.03; hi = m + 0.03; }
+    const X = ts => PL + (ts - t0) / Math.max(1, t1 - t0) * (W - PL - PR);
+    const Y = v => PT + (hi - v) / (hi - lo) * (H - PT - PB);
+    const d = pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1)).join("");
+    const hrs = Math.round((t1 - t0) / 3600000);
+    $("wxSpark").innerHTML = `<path class="ar" d="${d}L${X(t1).toFixed(1)},${H - PB}L${X(t0).toFixed(1)},${H - PB}Z"/><path class="ln" d="${d}"/>` +
+      `<circle class="pt" cx="${X(t1).toFixed(1)}" cy="${Y(last[1]).toFixed(1)}" r="3"/>` +
+      `<text class="lb" x="${PL}" y="${H - 1}">${hrs} hr ago</text><text class="lb" x="${W - PR}" y="${H - 1}" text-anchor="end">now</text>`;
+  }
+
   const arrowSvg = d => `<svg viewBox="0 0 24 24" style="transform:rotate(${(COMPASS[d] ?? 0) + 180}deg)"><path d="M12 3l5 14-5-3-5 3z"/></svg>`;
   function renderWx() {
     if (!gpsCapable) return;
     $("wx").hidden = false;
     const c = store.get("wx", null);
     if (!c || !c.periods || !c.periods.length) return;
+    renderPressure(c.pres);
     const live = pickedDay === null, ymd = live ? todayYMD() : pickedDay, now = Date.now();
     const age = Math.round((now - c.ts) / 60000);
     $("wxWhere").textContent = `${c.approx ? "middle of your zone" : "near " + (c.city || "you")} · ${age < 2 ? "just updated" : age < 90 ? age + " min ago" : "as of " + t(c.ts)}`;
