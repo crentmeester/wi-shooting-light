@@ -796,6 +796,7 @@ footer a { color: inherit; }
   const DIRWORD = { N: "north", NNE: "north-northeast", NE: "northeast", ENE: "east-northeast", E: "east", ESE: "east-southeast", SE: "southeast", SSE: "south-southeast", S: "south", SSW: "south-southwest", SW: "southwest", WSW: "west-southwest", W: "west", WNW: "west-northwest", NW: "northwest", NNW: "north-northwest" };
   const fmtHour = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric" });
   let wxBusy = false, wxAgain = false;
+  const WX_VERSION = 2; // bump when the saved weather format changes
   function wxPoint() {
     if (gpsActive && gps && zoneFromLatLon(gps.lat, gps.lon)) return { lat: gps.lat, lon: gps.lon, approx: false };
     const [e, w] = BANDS[zone.z];
@@ -808,7 +809,9 @@ footer a { color: inherit; }
     if (wxBusy) { wxAgain = true; return; } // location changed mid-request: fetch again when done
     const pt = wxPoint(), key = pt.lat.toFixed(2) + "," + pt.lon.toFixed(2);
     const cached = store.get("wx", null);
-    if (!force && cached && cached.key === key && Date.now() - cached.ts < 30 * MIN) { renderWx(); return; }
+    const fresh = cached && cached.v === WX_VERSION && cached.key === key && Date.now() - cached.ts < 30 * MIN
+      && (cached.pres || Date.now() - cached.ts < 5 * MIN); // retry pressure sooner if it was unavailable
+    if (!force && fresh) { renderWx(); return; }
     wxBusy = true; $("wxRefresh").setAttribute("aria-busy", "true");
     try {
       const pr = await fetch(`https://api.weather.gov/points/${pt.lat.toFixed(4)},${pt.lon.toFixed(4)}`, { headers: { Accept: "application/geo+json" } });
@@ -823,7 +826,7 @@ footer a { color: inherit; }
         sky: p.shortForecast, pop: p.probabilityOfPrecipitation?.value ?? null
       }));
       const pres = await loadPressure(pj.properties.observationStations).catch(() => null);
-      store.set("wx", { key, ts: Date.now(), city, approx: pt.approx, periods, pres });
+      store.set("wx", { v: WX_VERSION, key, ts: Date.now(), city, approx: pt.approx, periods, pres });
       $("wxNote").textContent = "";
     } catch (err) {
       $("wxNote").textContent = store.get("wx", null) ? "Couldn't reach the Weather Service. Showing the last forecast you loaded." : "Couldn't reach the Weather Service. Check your signal and tap refresh.";
@@ -864,8 +867,13 @@ footer a { color: inherit; }
   }
   function renderPressure(pres) {
     const box = $("wxP");
-    if (!pres || !pres.pts || pres.pts.length < 3) { box.hidden = true; return; }
     box.hidden = false;
+    if (!pres || !pres.pts || pres.pts.length < 3) {
+      $("wxPVal").textContent = "–"; $("wxSpark").innerHTML = "";
+      const el = $("wxPTrend"); el.className = "wxptrend steady"; el.textContent = "Not available right now";
+      $("wxPNote").textContent = "Nearby weather stations aren't reporting pressure at the moment. Tap refresh to try again.";
+      return;
+    }
     const pts = pres.pts, last = pts[pts.length - 1];
     $("wxPVal").textContent = last[1].toFixed(2);
     const tr = pressureTrend(pts), el = $("wxPTrend");
